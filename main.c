@@ -1,8 +1,8 @@
 #include "proto.h"
 
 int main( argc, argv )
-     int argc;
-     char **argv;
+int argc;
+char **argv;
 {
   int rank, size; // size = number of processors in the hosts file
   real tstart, tstop;
@@ -30,7 +30,7 @@ int main( argc, argv )
   real dt;
 
   if (argc < 6)
-    {printf("\n Too few arguments to the C code, bailing out. \n"); exit(0); }
+  {printf("\n Too few arguments to the C code, bailing out. \n"); exit(0); }
 
   Nmt  	 = atoi(argv[1]);
   dt 	 = atof(argv[2]);
@@ -41,11 +41,11 @@ int main( argc, argv )
   Gmax = Nmt*Nmax/2;
   iprint_checkpoint = 100*iprint;
 
-#ifndef resume
+  #ifndef resume
   if (rank == 0) makedatadir(argv);
-#else
+  #else
   if (rank == 0) opendatadir(argv);
-#endif
+  #endif
 
   // GSL random number generator setup
   gsl_rng_default_seed=1;
@@ -64,12 +64,12 @@ int main( argc, argv )
   bufsend = calloc(Nmt*3, sizeof(real));
   bufrecv = calloc(Nmt*3, sizeof(real));
 
-#ifndef resume
+  #ifndef resume
   initmtcentro(mt, centro);           // initialize MT and centro positions
   t=0;
-#else
+  #else
   popmtcentro(checkpointfile, mt, centro, &t);
-#endif
+  #endif
 
   initparams(params, mt);                   // initialize MT parameters
   initrodparams(params, rparams, rod, dt);  // initialize rod parameters
@@ -77,85 +77,78 @@ int main( argc, argv )
   // the main loop
 
   for (; t<=iter; t++)
+  {
+    ///////// printing /////////
+    if (t%iprint == 0)
     {
-      ///////// printing /////////
-      if (t%iprint == 0)
-	{
-	  /*
-	  // Bcast N of each MT
-	  for(n=0; n<Nmt; n++)
-	    MPI_Bcast (&mt[n].N, 1, MPI_INT, (n%size), MPI_COMM_WORLD);
-	  */
+      /*
+      // Bcast N of each MT
+      for(n=0; n<Nmt; n++)
+      MPI_Bcast (&mt[n].N, 1, MPI_INT, (n%size), MPI_COMM_WORLD);
+      */
+      // Bcast positions
 
-	  // Bcast positions
+      for(n=0; n<Nmt; n++)
+      {
+        for(k=0; k<Nmax; k++)
+        {
+          ps = &mt[n].seg[k];
+          buffer[(n*Nmax+k)*7+0]= ps->rx; buffer[(n*Nmax+k)*7+1]= ps->ry; buffer[(n*Nmax+k)*7+2]= ps->rz;
+          buffer[(n*Nmax+k)*7+3]= ps->q0; buffer[(n*Nmax+k)*7+4]= ps->qx; buffer[(n*Nmax+k)*7+5]= ps->qy; buffer[(n*Nmax+k)*7+6]= ps->qz;
+        }
+      }
 
-	  for(n=0; n<Nmt; n++)
-	    {
-	      for(k=0; k<Nmax; k++)
-		{
-		  ps = &mt[n].seg[k];
-		  buffer[(n*Nmax+k)*7+0]= ps->rx; buffer[(n*Nmax+k)*7+1]= ps->ry; buffer[(n*Nmax+k)*7+2]= ps->rz;
-		  buffer[(n*Nmax+k)*7+3]= ps->q0; buffer[(n*Nmax+k)*7+4]= ps->qx; buffer[(n*Nmax+k)*7+5]= ps->qy; buffer[(n*Nmax+k)*7+6]= ps->qz;
-		}
-	    }
+      for(n=0; n<Nmt; n++)
+      {
+        ptr2buf = &buffer[0] + n*Nmax*7;
+        MPI_Bcast (ptr2buf, Nmax*7, MPIreal, (n%size), MPI_COMM_WORLD);
+      }
 
-	  for(n=0; n<Nmt; n++)
-	    {
-	      ptr2buf = &buffer[0] + n*Nmax*7;
-	      MPI_Bcast (ptr2buf, Nmax*7, MPIreal, (n%size), MPI_COMM_WORLD);
-	    }
+      for(n=0; n<Nmt; n++)
+      {
+        for(k=0; k<Nmax; k++)
+        {
+          ps = &mt[n].seg[k];
+          ps->rx=buffer[(n*Nmax+k)*7+0]; ps->ry=buffer[(n*Nmax+k)*7+1]; ps->rz=buffer[(n*Nmax+k)*7+2];
+          ps->q0=buffer[(n*Nmax+k)*7+3]; ps->qx=buffer[(n*Nmax+k)*7+4]; ps->qy=buffer[(n*Nmax+k)*7+5]; ps->qz=buffer[(n*Nmax+k)*7+6];
+        }
+      }
 
-	  for(n=0; n<Nmt; n++)
-	    {
-	      for(k=0; k<Nmax; k++)
-		{
-		  ps = &mt[n].seg[k];
-		  ps->rx=buffer[(n*Nmax+k)*7+0]; ps->ry=buffer[(n*Nmax+k)*7+1]; ps->rz=buffer[(n*Nmax+k)*7+2];
-		  ps->q0=buffer[(n*Nmax+k)*7+3]; ps->qx=buffer[(n*Nmax+k)*7+4]; ps->qy=buffer[(n*Nmax+k)*7+5]; ps->qz=buffer[(n*Nmax+k)*7+6];
-		}
-	    }
+      if (rank == 0) print(mt, centro, Nmt, t, dt);
 
-	  if (rank == 0) print(mt, centro, Nmt, t, dt);
-
-	  if (t%iprint_checkpoint == 0)
-	    checkpoint(checkpointfile, mt, centro, Nmt, t, dt);
-
-	}
-      ////////////////////////
-
-      polymerize(mt, params, dt);
-
-      for(n=rank; n<Nmt; n=n+size)
-	{
-	  interfacein(&mt[n], &rod[n], centro);
-	  rodflex(rparams, &rod[n], t);
-	  interfaceout(&mt[n], &rod[n]);
-	}
-
-      ////// move centro ///////
-      if (t%centrofactor == 0)
-	{
-	  for(n=rank; n<Nmt; n=n+size)
-	    {
-	      ps = &mt[n].seg[0];
-	      bufsend[n*3+0]= ps->rx; bufsend[n*3+1]= ps->ry; bufsend[n*3+2]= ps->rz;
-	    }
-
-	  MPI_Allreduce(bufsend, bufrecv, 3*Nmt, MPIreal, MPI_SUM, MPI_COMM_WORLD);
-
-	  for(n=0; n<Nmt; n++)
-	    {
-	      ps = &mt[n].seg[0];
-	      ps->rx=bufrecv[n*3+0]; ps->ry=bufrecv[n*3+1]; ps->rz=bufrecv[n*3+2];
-	    }
-
-	  movecentro(params, centro, mt, centrofactor*dt);
-
-	}
-
-      ////////////////////////////
+      if (t%iprint_checkpoint == 0)
+      checkpoint(checkpointfile, mt, centro, Nmt, t, dt);
 
     }
+
+    polymerize(mt, params, dt);
+
+    for(n=rank; n<Nmt; n=n+size)
+    {
+      interfacein(&mt[n], &rod[n], centro);
+      rodflex(rparams, &rod[n], t);
+      interfaceout(&mt[n], &rod[n]);
+    }
+
+    ////// move centro ///////
+    if (t%centrofactor == 0)
+    {
+      for(n=rank; n<Nmt; n=n+size)
+      {
+        ps = &mt[n].seg[0];
+        bufsend[n*3+0]= ps->rx; bufsend[n*3+1]= ps->ry; bufsend[n*3+2]= ps->rz;
+      }
+
+      MPI_Allreduce(bufsend, bufrecv, 3*Nmt, MPIreal, MPI_SUM, MPI_COMM_WORLD);
+
+      for(n=0; n<Nmt; n++)
+      {
+        ps = &mt[n].seg[0];
+        ps->rx=bufrecv[n*3+0]; ps->ry=bufrecv[n*3+1]; ps->rz=bufrecv[n*3+2];
+      }
+      movecentro(params, centro, mt, centrofactor*dt);
+    }
+  }
 
   tstop = MPI_Wtime();
 
@@ -171,11 +164,11 @@ int main( argc, argv )
   free(bufrecv);
 
   for (n=0; n<Nmt; n++)
-    {
-      free(mt[n].seg);
-      free(rod[n].elems);
-      free(rod[n].nodes);
-    }
+  {
+    free(mt[n].seg);
+    free(rod[n].elems);
+    free(rod[n].nodes);
+  }
 
   free(mt);
   free(rod);
